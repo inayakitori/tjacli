@@ -16,6 +16,8 @@ calamityInfoString = "\
 \DEMOSTART:102.128\n\
 \BGMOVIE:Calamity Fortune.mp4"
 
+
+calamityInfo :: SongData
 calamityInfo = SongData
     "Calamity Fortune"
     "Calamity Fortune"
@@ -26,6 +28,8 @@ calamityInfo = SongData
     (-1.328)
     102.128
     "Calamity Fortune.mp4"
+
+
 
 spec:: Spec
 spec =
