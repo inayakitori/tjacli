@@ -23,6 +23,9 @@ dependencies:
 - optparse-applicative
 - split
 - pretty-simple
+- filepath
+- directory
+- text
 
 ghc-options:
 - -Wall

@@ -1,0 +1,36 @@
+osu file format v14
+
+[General]
+AudioFilename: %{waveName}%
+AudioLeadIn: %{offset}%
+PreviewTime: %{demoStart}%
+StackLeniency: 0.7
+Mode: 1
+Countdown: 0
+SampleSet: Normal
+
+[Metadata]
+Title:%{titleja}%
+TitleUnicode:%{title}%
+Artist:TJA Artist TODO
+ArtistUnicode:TJA Artist TODO
+Creator:TJA Creator TODO
+Version:%{course}%
+Source:TJA conversion TODO
+Tags:tja %{title}% taiko_%{course}% taiko_diff_%{level}%
+
+[Difficulty]
+HPDrainRate:7
+CircleSize:5
+OverallDifficulty:5.5
+ApproachRate:5
+SliderMultiplier:1.4
+SliderTickRate:1
+
+
+[TimingPoints]
+%{bpmEvents:%{time}%,%{beatLength}%,%{measure}%,0,0,100,1,0}%
+%{svEvents:%{time}%,%{invMultiplier}%,%{measure}%,0,0,100,0,0}
+
+[HitObjects]
+%{hitEvents:0,0,%{time}%,1,%{noteType}%,0:0:0:0:\n}%

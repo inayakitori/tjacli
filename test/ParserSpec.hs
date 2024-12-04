@@ -2,9 +2,11 @@ module ParserSpec where
 
 import SpecHelper
 import Lib.Parser (emptySongData)
+import Data.Text (pack, Text)
+import qualified Data.Text as Text
 
-calamityInfoString :: String
-calamityInfoString = "\
+calamityInfoString :: Text
+calamityInfoString = pack "\
 \//TJADB Project \n\
 \TITLE:Calamity Fortune \n\
 \TITLEJA:Calamity Fortune \n\
@@ -19,28 +21,27 @@ calamityInfoString = "\
 
 calamityInfo :: SongData
 calamityInfo = SongData
-    "Calamity Fortune"
-    "Calamity Fortune"
-    "--LeaF/Touhou Onsen Yuugi 5"
-    "東方Projectアレンジ LeaF"
+    (pack "Calamity Fortune")
+    (pack "Calamity Fortune")
+    (pack "--LeaF/Touhou Onsen Yuugi 5")
+    (pack "東方Projectアレンジ LeaF")
     200.0
-    "Calamity Fortune.ogg"
+    (pack "Calamity Fortune.ogg")
     (-1.328)
     102.128
-    "Calamity Fortune.mp4"
-
-
+    (pack "Calamity Fortune.mp4")
+    (pack "unknown")
 
 spec:: Spec
 spec =
     describe "parseSongData" $ do
         context "[row]" $
             it "should have only filled field of {title = \"The title of the song\"} and the rest unknown" $
-                parseSongData ["TITLE:The title of the song"] emptySongData `shouldBe` (emptySongData {title = "The title of the song"})
+                parseSongData [pack "TITLE:The title of the song"] emptySongData `shouldBe` (emptySongData {title = pack "The title of the song"})
                 
         context "Start of Calamity Fortune file" $
             it "should parse the calamity fortune info" $
-                parseSongData (lines calamityInfoString) emptySongData `shouldBe` calamityInfo
+                parseSongData (Text.lines calamityInfoString) emptySongData `shouldBe` calamityInfo
 
 main :: IO ()
 main = hspec spec

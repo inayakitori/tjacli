@@ -3,10 +3,14 @@ module Lib.Parser (
     , getTJA
     , parseSongData
     , SongData (..)
+    , TJAFile (..)
+    , ChartData (..)
     , emptySongData
+    , Options (..)
+    , GameEvent (..)
+    , Note (..)
     ) where
 
-import Data.List.Split(splitOn, splitOneOf)
 import Data.List (intercalate, isPrefixOf, singleton)
 import Options.Applicative (Parser)
 import Options.Applicative.Builder
@@ -16,16 +20,26 @@ import Data.Char
 import Text.Read (readMaybe)
 import Data.Maybe (fromJust, fromMaybe)
 import Data.Coerce (coerce)
-import Debug.Trace (trace)
+import Debug.Trace (trace, traceId, traceShowId)
+import GHC.IO.IOMode (IOMode(ReadMode))
+import GHC.IO.Handle (hSetEncoding, hGetContents)
+import System.IO (openFile, utf8, utf8_bom)
+import Data.Text (pack, Text, breakOn, unpack)
+import qualified Data.Text as Text
+import qualified Data.List as List
+import qualified Data.List.Split as List.Split
+import qualified Data.Bifunctor
 
 data Options = Options {
     inputFile :: FilePath,
+    outputDir :: FilePath,
     verbose :: Bool
 } deriving (Show)
 
 optionsParser :: Parser Options
 optionsParser = Options
     <$> strOption (long "input" <> short 'i' <> help "The .tja file to parse" <> metavar "FILE")
+    <*> strOption (long "output" <> short 'o' <> help "The output osu directory" <> metavar "FOLDER")
     <*> switch (long "verbose" <> short 'v' <> help "verbose output" <> showDefault)
 
 {-
@@ -44,28 +58,30 @@ file
 
 data TJAFile = TJAFile {
     songData :: SongData,
-    charts :: [(Course, ChartData)]
+    charts :: [(Text, ChartData)]
 } deriving (Show, Eq)
-
-newtype Course = Course String deriving (Show, Eq)
 
 data SongData = SongData {
-    title :: String,
-    titleja :: String,
-    subtitle :: String,
-    subtitleja :: String,
+    title :: Text,
+    titleja :: Text,
+    subtitle :: Text,
+    subtitleja :: Text,
     bpm :: Double,
-    waveName :: String,
+    waveName :: Text,
     offset :: Double,
     demoStart :: Double,
-    bgMovie :: String
+    bgMovie :: Text,
+    maker :: Text
 } deriving (Show, Eq)
 
+undefText :: Text
+undefText = pack "unknown"
+
 emptySongData :: SongData
-emptySongData = SongData "unknown" "unknown" "unknown" "unknown" 0 "unknown" 0 0 "unknown"
+emptySongData = SongData undefText undefText undefText undefText 0 undefText 0 0 undefText undefText
 
 data ChartData = ChartData {
-    course :: String,
+    course :: Text,
     level :: Int,
     balloon :: Int,
     scoreInit :: Int,
@@ -76,7 +92,7 @@ data ChartData = ChartData {
 type Event = (Double, GameEvent)
 
 emptyChartData :: ChartData
-emptyChartData = ChartData "unknown" (-1) (-1) (-1) (-1) []
+emptyChartData = ChartData undefText (-1) (-1) (-1) (-1) []
 
 data GameEvent = ScrollEvent Double | BPMEvent Double | GogoEvent Bool | NoteEvent Note deriving (Show, Eq)
 
@@ -96,34 +112,47 @@ parseArgs = execParser (info (optionsParser <**> helper)
 
 
 getTJA:: Options -> IO TJAFile
-getTJA opts = parseTJA <$> readFile (inputFile opts)
+getTJA opts = parseTJA <$> readUTF8File (inputFile opts)
 
+readUTF8File:: FilePath -> IO Text
+readUTF8File filepath = pack <$> do
+    inputHandle <- openFile filepath ReadMode
+    hSetEncoding inputHandle utf8_bom
+    hGetContents inputHandle
 
-parseTJA :: String -> TJAFile
+parseTJA :: Text -> TJAFile
 parseTJA tjaData =
     -- head = song info, tail = chart info
-    (\(song_text,charts_text) -> let parsedSongData = parseSongData (lines song_text) emptySongData in
+    (\(song_text,charts_text) -> 
+        let 
+            parsedSongData = parseSongData (Text.lines song_text) emptySongData 
+        in
         TJAFile {
-            songData = parsedSongData,
-            charts = (\chartData -> (Course (head (words chartData)), parseChartData parsedSongData chartData emptyChartData)) <$> charts_text
+            songData = parsedSongData, 
+            charts = (\chartData -> (-- the first line is the difficulty level
+                    Text.tail $ snd $ Text.breakOn (pack ":") (head $ Text.lines chartData),
+                    parseChartData parsedSongData chartData emptyChartData)
+                    )
+                <$> tail (splitAtAndKeepDelimiter (pack "COURSE:") charts_text)
         }
-    ) $ (\xs -> (head xs , tail xs)) (splitAtAndKeepDelimiter "COURSE:" tjaData) -- separate
+    ) $ breakOn (pack "COURSE:") tjaData -- separate
 
-parseSongData :: [String] -> (SongData -> SongData)
+parseSongData :: [Text] -> (SongData -> SongData)
 parseSongData [] = id
 parseSongData [row]
-    | attribute == "TITLE" = \s -> s {title = value}
-    | attribute == "TITLEJA" = \s -> s {titleja = value}
-    | attribute == "SUBTITLE" = \s -> s {subtitle = value}
-    | attribute == "SUBTITLEJA" = \s -> s {subtitleja = value}
-    | attribute == "BPM" = \s -> s {bpm = fromMaybe (-1) (readMaybe value)}
-    | attribute == "WAVE" = \s -> s {waveName = value}
-    | attribute == "OFFSET" = \s -> s {offset =  fromMaybe 0 (readMaybe value)}
-    | attribute == "DEMOSTART" = \s -> s {demoStart = fromMaybe 0 (readMaybe value)}
-    | attribute == "BGMOVIE" = \s -> s {bgMovie = value}
-    | otherwise = id
-    where (attribute, value) = (\r -> (trim (head r), intercalate ":" (tail r))) (splitOn ":"  (trim row)) -- split off the first : but the rest of them should be recombined
-parseSongData (row:rows) = parseSongData rows . parseSongData [row]
+    | attribute == pack "TITLE" = \s -> s {title = value}
+    | attribute == pack "TITLEJA" = \s -> s {titleja = value}
+    | attribute == pack "SUBTITLE" = \s -> s {subtitle = value}
+    | attribute == pack "SUBTITLEJA" = \s -> s {subtitleja = value}
+    | attribute == pack "BPM" = \s -> s {bpm = fromMaybe (-1) (readMaybe (unpack value))}
+    | attribute == pack "WAVE" = \s -> s {waveName = value}
+    | attribute == pack "OFFSET" = \s -> s {offset =  fromMaybe 0 (readMaybe (unpack value))}
+    | attribute == pack "DEMOSTART" = \s -> s {demoStart = fromMaybe 0 (readMaybe (unpack value))}
+    | attribute == pack "BGMOVIE" = \s -> s {bgMovie = value}
+    | attribute == pack "MAKER" = \s -> s {maker = value}
+    | otherwise = id -- need to remove the ":" on it
+    where (attribute, value) = Data.Bifunctor.second Text.tail $ Text.breakOn (pack ":")  (Text.strip row)  -- split off the first : but the rest of them should be recombined
+parseSongData (row:rows) = parseSongData rows .parseSongData [row]
 
 -- as the interpreter goes along the timings will increase and will store the current state information and events so far
 data InterpreterState = InterpreterState {
@@ -142,23 +171,22 @@ newInterpreter :: SongData -> InterpreterState
 newInterpreter songData = InterpreterState (- offset songData) (bpm songData) (4,4) 1.0 []
 
 -- Slowly "writes" to the ChartData object
-parseChartData :: SongData -> String -> (ChartData -> ChartData)
-parseChartData _ [] = id -- load the chart info and the song data in 
-parseChartData songData chartData = parseChartInfo chartInfo . \c -> c {events = chartEvents}
-    where chartEvents = ievents (parseBars (splitOn "," (intercalate "\n" chartEventLines)) (newInterpreter songData))
-          (chartInfo, chartEventLines) = splitAtFirst "#START" (lines chartData)
+parseChartData :: SongData -> Text -> (ChartData -> ChartData)
+parseChartData songData chartData = parseChartInfo (Text.lines chartInfo) . \c -> c {events = chartEvents}
+    where chartEvents = ievents (parseBars (List.Split.splitOn "," (intercalate "\n" (lines (unpack chartEventLines)))) (newInterpreter songData))
+          (chartInfo, chartEventLines) = Text.breakOn (pack "#START") chartData
 
 -- The scroll speed and stuff
-parseChartInfo :: [String] -> (ChartData -> ChartData)
+parseChartInfo :: [Text] -> (ChartData -> ChartData)
 parseChartInfo [] = id
 parseChartInfo [row]
-    | attribute == "COURSE" = \s -> s {course = value}
-    | attribute == "LEVEL" = \s -> s {level = fromMaybe (-1) (readMaybe value)}
-    | attribute == "BALLOON" = \s -> s {balloon = fromMaybe (-1) (readMaybe value)}
-    | attribute == "SCOREINIT" = \s -> s {scoreInit = fromMaybe (-1) (readMaybe value)}
-    | attribute == "SCOREDIFF" = \s -> s {scoreDiff = fromMaybe (-1) (readMaybe value)}
+    | attribute == pack "COURSE" = \s -> s {course = value}
+    | attribute == pack "LEVEL" = \s -> s {level = fromMaybe (-1) (readMaybe (unpack value))}
+    | attribute == pack "BALLOON" = \s -> s {balloon = fromMaybe (-1) (readMaybe (unpack value))}
+    | attribute == pack "SCOREINIT" = \s -> s {scoreInit = fromMaybe (-1) (readMaybe (unpack value))}
+    | attribute == pack "SCOREDIFF" = \s -> s {scoreDiff = fromMaybe (-1) (readMaybe (unpack value))}
     | otherwise = id
-    where (attribute, value) = (\r -> (trim (head r), intercalate ":" (tail r))) (splitOn ":"  (trim row)) -- split off the first : but the rest of them should be recombined
+    where (attribute, value) = Text.breakOn (pack ":") (Text.strip row) -- split off the first : but the rest of them should be recombined
 parseChartInfo (row:rows) = parseChartInfo rows . parseChartInfo [row]
 
 -- The notes and timings. Fed bar sections (separated by commas) and events which get newlines. This one is a little bit different just cause it actually has to use the previous interpreter state
@@ -176,15 +204,15 @@ parseBarLines :: [String] -> Int -> InterpreterState -> InterpreterState
 parseBarLines [] _ istate = istate -- this would only happen if the bar somehow had no lines
 parseBarLines [""] _ istate = istate -- ignore empty lines
 parseBarLines [barLine] subdivision istate
-    | "#SCROLL " `isPrefixOf` barLine = 
+    | "#SCROLL " `isPrefixOf` barLine =
         let new_value = fromMaybe (-1) (readEventValue barLine)
             event = (time istate, ScrollEvent new_value)
-                in addEvent event istate {iscroll = new_value} 
-    | "#BPMCHANGE " `isPrefixOf` barLine = 
+                in addEvent event istate {iscroll = new_value}
+    | "#BPMCHANGE " `isPrefixOf` barLine =
         let new_value = fromMaybe (-1) (readEventValue barLine)
             event = (time istate, BPMEvent new_value)
-                in addEvent event istate {ibpm = new_value} 
-    | "#DELAY " `isPrefixOf` barLine = 
+                in addEvent event istate {ibpm = new_value}
+    | "#DELAY " `isPrefixOf` barLine =
         let new_value = fromMaybe (-1) (readEventValue barLine)
                 in istate {time = new_value + time istate} --the delay just adds on extra time
     | isNumber (head barLine) =
@@ -210,15 +238,15 @@ parseNotes noteData timePerNote istate =
 
 -- drops the #ARG at the start and returns the number (maybe)
 readEventValue :: String -> Maybe Double
-readEventValue dataline = readMaybe (trim (snd (splitAtFirst ' ' dataline)))  
+readEventValue dataline = readMaybe (trim (snd (splitAtFirst ' ' dataline)))
 
 addEvent :: Event -> InterpreterState -> InterpreterState
 addEvent event i = i {ievents = ievents i ++ [event]}
 -- makes the delimiter be attached to start of each element
-splitAtAndKeepDelimiter :: Eq a => [a] -> [a] -> [[a]]
+splitAtAndKeepDelimiter :: Text -> Text -> [Text]
 splitAtAndKeepDelimiter delimiter s =
-    head_l : ((delimiter++) <$> tail_l) where
-        (head_l, tail_l) = (\l -> (head l, tail l)) $ splitOn delimiter s
+    head_l : (Text.append delimiter <$> tail_l) where
+        (head_l, tail_l) = (\l -> (head l, tail l)) $ Text.splitOn delimiter s
 
 splitAtFirst :: Eq a => a -> [a] -> ([a], [a])
 splitAtFirst x = fmap (drop 1) . break (x ==)

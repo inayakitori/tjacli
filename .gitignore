@@ -12,6 +12,7 @@ cabal-dev
 .hsenv
 .cabal-sandbox/
 cabal.sandbox.config
+*.cabal
 *.prof
 *.aux
 *.hp
@@ -21,5 +22,6 @@ cabal.project.local
 cabal.project.local~
 .HTF/
 .ghc.environment.*
-res/*
-run.txt
+out/*
+in/*
+
