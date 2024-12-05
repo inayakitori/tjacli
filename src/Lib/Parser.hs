@@ -58,7 +58,7 @@ file
 
 data TJAFile = TJAFile {
     songData :: SongData,
-    charts :: [(Text, ChartData)]
+    charts :: [ChartData]
 } deriving (Show, Eq)
 
 data SongData = SongData {
@@ -123,16 +123,13 @@ readUTF8File filepath = pack <$> do
 parseTJA :: Text -> TJAFile
 parseTJA tjaData =
     -- head = song info, tail = chart info
-    (\(song_text,charts_text) -> 
-        let 
-            parsedSongData = parseSongData (Text.lines song_text) emptySongData 
+    (\(song_text,charts_text) ->
+        let
+            parsedSongData = parseSongData (Text.lines song_text) emptySongData
         in
         TJAFile {
-            songData = parsedSongData, 
-            charts = (\chartData -> (-- the first line is the difficulty level
-                    Text.tail $ snd $ Text.breakOn (pack ":") (head $ Text.lines chartData),
-                    parseChartData parsedSongData chartData emptyChartData)
-                    )
+            songData = parsedSongData,
+            charts = (\chartText -> parseChartData parsedSongData chartText emptyChartData)
                 <$> tail (splitAtAndKeepDelimiter (pack "COURSE:") charts_text)
         }
     ) $ breakOn (pack "COURSE:") tjaData -- separate
@@ -151,7 +148,7 @@ parseSongData [row]
     | attribute == pack "BGMOVIE" = \s -> s {bgMovie = value}
     | attribute == pack "MAKER" = \s -> s {maker = value}
     | otherwise = id -- need to remove the ":" on it
-    where (attribute, value) = Data.Bifunctor.second Text.tail $ Text.breakOn (pack ":")  (Text.strip row)  -- split off the first : but the rest of them should be recombined
+    where (attribute, value) = breakAndRemoveDelimiter (pack ":")  (Text.strip row)  -- split off the first : but the rest of them should be recombined
 parseSongData (row:rows) = parseSongData rows .parseSongData [row]
 
 -- as the interpreter goes along the timings will increase and will store the current state information and events so far
@@ -168,12 +165,12 @@ measureFraction :: (Int, Int) -> Double
 measureFraction m = fromIntegral (fst m) / fromIntegral (snd m)
 
 newInterpreter :: SongData -> InterpreterState
-newInterpreter songData = InterpreterState (- offset songData) (bpm songData) (4,4) 1.0 []
+newInterpreter songData = InterpreterState (-offset songData) (bpm songData) (4,4) 1.0 [(-offset songData, BPMEvent (bpm songData))]
 
 -- Slowly "writes" to the ChartData object
 parseChartData :: SongData -> Text -> (ChartData -> ChartData)
 parseChartData songData chartData = parseChartInfo (Text.lines chartInfo) . \c -> c {events = chartEvents}
-    where chartEvents = ievents (parseBars (List.Split.splitOn "," (intercalate "\n" (lines (unpack chartEventLines)))) (newInterpreter songData))
+    where chartEvents = ievents (parseBars (List.Split.splitOn "," (unpack chartEventLines)) (newInterpreter songData))
           (chartInfo, chartEventLines) = Text.breakOn (pack "#START") chartData
 
 -- The scroll speed and stuff
@@ -186,22 +183,25 @@ parseChartInfo [row]
     | attribute == pack "SCOREINIT" = \s -> s {scoreInit = fromMaybe (-1) (readMaybe (unpack value))}
     | attribute == pack "SCOREDIFF" = \s -> s {scoreDiff = fromMaybe (-1) (readMaybe (unpack value))}
     | otherwise = id
-    where (attribute, value) = Text.breakOn (pack ":") (Text.strip row) -- split off the first : but the rest of them should be recombined
+    where (attribute, value) = breakAndRemoveDelimiter (pack ":") (Text.strip row) -- split off the first : but the rest of them should be recombined
 parseChartInfo (row:rows) = parseChartInfo rows . parseChartInfo [row]
 
 -- The notes and timings. Fed bar sections (separated by commas) and events which get newlines. This one is a little bit different just cause it actually has to use the previous interpreter state
 parseBars :: [String] -> InterpreterState -> InterpreterState
 parseBars [] i = i
 parseBars [bar] istate = parseBarLines (lines bar) subdivision  istate
-    where subdivision = length (concatMap -- the subdivision is the number of notes in a bar
-                (filter isNumber)
-                (filter (\s -> not (s == "" || head s == '#')) (lines bar))
+    where subdivision = length (
+            concatMap -- the subdivision is the number of notes in a bar. need to ignore comments too
+                (filter isNumber . unpack . fst . Text.breakOn (pack "//") . pack)
+                (filter (\ s -> not (s == "" || head s == '#')) (lines bar))
             )
 parseBars (bar:bars) istate = parseBars bars (parseBars [bar] istate) -- use the previous interpreter state for this one
 
 -- the lines for each bar. must be read line by line to update the interpreter as it goes
 parseBarLines :: [String] -> Int -> InterpreterState -> InterpreterState
-parseBarLines [] _ istate = istate -- this would only happen if the bar somehow had no lines
+parseBarLines _ 0 istate = istate {time = time istate + measureLength} -- no notes, just advance
+    where measureLength = 4.0 * 60.0 * measureFraction (measure istate)/ ibpm istate
+parseBarLines [] _ _ = error "should be impossible to have numbers but no text" -- impossible 
 parseBarLines [""] _ istate = istate -- ignore empty lines
 parseBarLines [barLine] subdivision istate
     | "#SCROLL " `isPrefixOf` barLine =
@@ -214,14 +214,15 @@ parseBarLines [barLine] subdivision istate
                 in addEvent event istate {ibpm = new_value}
     | "#DELAY " `isPrefixOf` barLine =
         let new_value = fromMaybe (-1) (readEventValue barLine)
-                in istate {time = new_value + time istate} --the delay just adds on extra time
+                in istate {time = new_value + time istate} -- the delay just adds on extra time
     | isNumber (head barLine) =
         parseNotes
             (read . singleton <$> barLine)
-            (4.0 * 60.0 * measureFraction (measure istate)/ (ibpm istate * fromIntegral subdivision))
+            (measureLength / fromIntegral subdivision)
             istate
     -- TODO ADD MORE
     | otherwise = istate
+    where measureLength = 4.0 * 60.0 * measureFraction (measure istate)/ ibpm istate
 parseBarLines (barLine:barLines) subdivision istate =
     parseBarLines barLines subdivision (parseBarLines [barLine] subdivision istate)
 
@@ -233,12 +234,15 @@ parseNotes noteData timePerNote istate =
         time = time istate + timePerNote * fromIntegral (length notes)
     }
     where notes = NoteEvent . toEnum <$> noteData :: [GameEvent]
-          timings = (time istate +) . (timePerNote *) . fromIntegral <$> [1 ..(length notes)]
+          timings = (time istate +) . (timePerNote *) . fromIntegral <$> [0 ..(length notes)]
           events =  filter (\e -> snd e /= NoteEvent None) (zip timings notes)
 
 -- drops the #ARG at the start and returns the number (maybe)
 readEventValue :: String -> Maybe Double
 readEventValue dataline = readMaybe (trim (snd (splitAtFirst ' ' dataline)))
+
+breakAndRemoveDelimiter :: Text -> Text -> (Text, Text)
+breakAndRemoveDelimiter delim text = Data.Bifunctor.second Text.tail $ Text.breakOn delim text
 
 addEvent :: Event -> InterpreterState -> InterpreterState
 addEvent event i = i {ievents = ievents i ++ [event]}

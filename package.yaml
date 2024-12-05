@@ -26,6 +26,7 @@ dependencies:
 - filepath
 - directory
 - text
+- zip-archive
 
 ghc-options:
 - -Wall
