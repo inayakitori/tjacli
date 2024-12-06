@@ -29,6 +29,7 @@ import qualified Data.Text as Text
 import qualified Data.List as List
 import qualified Data.List.Split as List.Split
 import qualified Data.Bifunctor
+import Data.Function ((&))
 
 data Options = Options {
     inputFile :: FilePath,
@@ -94,7 +95,13 @@ type Event = (Double, GameEvent)
 emptyChartData :: ChartData
 emptyChartData = ChartData undefText (-1) (-1) (-1) (-1) []
 
-data GameEvent = ScrollEvent Double | BPMEvent Double | GogoEvent Bool | NoteEvent Note deriving (Show, Eq)
+data GameEvent =
+    ScrollEvent Double
+    | BPMEvent Double
+    | GogoEvent Bool
+    | NoteEvent Note
+    | MeasureEvent (Double, Int) -- bpm and measure as X/4
+    deriving (Show, Eq)
 
 data Note = None |
     Don | Ka |
@@ -212,6 +219,17 @@ parseBarLines [barLine] subdivision istate
         let new_value = fromMaybe (-1) (readEventValue barLine)
             event = (time istate, BPMEvent new_value)
                 in addEvent event istate {ibpm = new_value}
+    | "#MEASURE " `isPrefixOf` barLine =
+        let (top, btm) = splitAtFirst ' ' barLine
+                & snd
+                & trim
+                & splitAtFirst '/'
+                & traceShowId
+                & (\(t,b) -> (fromMaybe 4 (readMaybe t), fromMaybe 4 (readMaybe b)))
+                & traceShowId
+            requiredBPM = traceShowId $ ibpm istate * fromIntegral btm / 4.0 -- change bpm to make it X/4 at new bpm for timing events
+            event = (time istate, MeasureEvent (requiredBPM, top) )
+                in addEvent event istate {measure = (top,btm)} -- for the interpreter we can use the actual measure
     | "#DELAY " `isPrefixOf` barLine =
         let new_value = fromMaybe (-1) (readEventValue barLine)
                 in istate {time = new_value + time istate} -- the delay just adds on extra time

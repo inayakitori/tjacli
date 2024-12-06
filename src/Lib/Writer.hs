@@ -79,7 +79,11 @@ getTimingEvents sd cd = unlines $ snd <$> sortBy (\event1 event2 -> fst event1 `
             ) <$> [x | x@(_, BPMEvent _) <- events cd]) ++
         ((\(t,e) ->
             (t, (show . secToMs) t ++ "," ++ mapEventValue e ++ ",4,0,0,100,0")
-        ) <$> [x | x@(_, ScrollEvent _) <- events cd])
+        ) <$> [x | x@(_, ScrollEvent _) <- events cd]) ++
+        ((\(t,e) ->
+            let (newBpm, newMeasure) = getMeasure e in
+            (t, (show . secToMs) t ++ "," ++ show newBpm ++ "," ++ show newMeasure ++ ",0,0,100,1")
+        ) <$> [x | x@(_, MeasureEvent _) <- events cd])
     )
 
 
@@ -90,6 +94,9 @@ getHitEvents sd cd = unlines (
         ) <$> [x | x@(_, NoteEvent _) <- events cd]
     )
 
+getMeasure :: GameEvent -> (Double, Int)
+getMeasure (MeasureEvent e) = e
+getMeasure _ = error "can't get measure for non-measure event"
 
 mapEventValue :: GameEvent -> String
 mapEventValue (NoteEvent Don) = "0"
