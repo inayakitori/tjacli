@@ -27,6 +27,8 @@ dependencies:
 - directory
 - text
 - zip-archive
+- bytestring
+- time
 
 ghc-options:
 - -Wall

@@ -1,9 +1,12 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use void" #-}
+{-# HLINT ignore "Use <&>" #-}
 module Lib.Writer (
     writeOSU
     ) where
 import Lib.Parser (TJAFile(..), Options (..), SongData (..), ChartData (..), GameEvent (..), Note (..))
 import System.FilePath (combine, takeDirectory, (</>), (<.>), takeExtension, makeValid)
-import System.Directory (createDirectory, createDirectoryIfMissing, copyFile)
+import System.Directory (createDirectory, createDirectoryIfMissing, copyFile, listDirectory)
 import Data.Text (unpack, Text, pack, concat, intercalate)
 import Control.Monad (foldM)
 import Data.Coerce (coerce)
@@ -14,6 +17,15 @@ import GHC.IO.IOMode (IOMode(WriteMode))
 import System.IO (utf8, hPutStr, hSetEncoding, openFile, hClose)
 import qualified Data.Text as Text
 import Data.List (sortBy)
+import qualified Codec.Archive.Zip as Zip
+import Data.String (IsString(fromString))
+import Codec.Archive.Zip (emptyArchive)
+import Data.Time.Clock.System (SystemTime)
+import qualified Data.Text.Lazy.Encoding as TLE
+import qualified Data.Text.Lazy as TL
+import qualified Data.ByteString.Lazy as BL
+
+
 
 
 writeOSU :: Options -> TJAFile -> IO ()
@@ -32,10 +44,24 @@ writeOSU opts tja = createDirectoryIfMissing True outputFolder
         )
         (charts tja)
     >> return ()
+    >> BL.readFile (inputFolder </> (unpack . waveName . songData) tja)
+    -- write the archive of all the entries
+    >>= \audioFile -> ( BL.writeFile (outputFolder <.> "osz")
+        . Zip.fromArchive
+        . foldl (flip Zip.addEntryToArchive) emptyArchive
+        ) -- the entry an files
+        (Zip.toEntry outputAudioName 0 audioFile : (createChartEntry (songData tja) <$> charts tja))
+    >> return ()
     where
         outputFolder = outputDir opts </> (makeValid . unpack . title . songData) tja
         inputFolder = takeDirectory (inputFile opts)
         outputAudioName = (unpack . Text.concat) [pack "audio.", snd (Text.breakOnEnd (pack ".") ((waveName . songData) tja))]
+
+createChartEntry :: SongData -> ChartData -> Zip.Entry
+createChartEntry sd cd = Zip.toEntry fileName 0 ((TLE.encodeUtf8 . TL.pack) (chartText sd cd))
+    where
+        diffText = unpack $ Data.Text.concat [title sd, pack " [", course cd, pack "]"]
+        fileName = makeValid (diffText <.> "osu")
 
 chartText :: SongData -> ChartData -> String
 chartText sd cd =
@@ -72,7 +98,7 @@ secToMs :: Double -> Int
 secToMs = round . (*1000)
 
 getTimingEvents :: SongData -> ChartData -> String
-getTimingEvents sd cd = unlines $ snd <$> sortBy (\event1 event2 -> fst event1 `compare` fst event2) 
+getTimingEvents sd cd = unlines $ snd <$> sortBy (\event1 event2 -> fst event1 `compare` fst event2)
     ( -- get the event text and their timings. should be done differently but I'm not optimising this
         ((\(t,e) -> -- time,beatLength,meter,sampleSet,sampleIndex,volume,uninherited,effects
             (t, (show . secToMs) t ++ "," ++ mapEventValue e ++ ",4,0,0,100,1")
