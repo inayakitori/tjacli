@@ -177,8 +177,11 @@ newInterpreter songData = InterpreterState (-offset songData) (bpm songData) (4,
 -- Slowly "writes" to the ChartData object
 parseChartData :: SongData -> Text -> (ChartData -> ChartData)
 parseChartData songData chartData = parseChartInfo (Text.lines chartInfo) . \c -> c {events = chartEvents}
-    where chartEvents = ievents (parseBars (List.Split.splitOn "," (unpack chartEventLines)) (newInterpreter songData))
-          (chartInfo, chartEventLines) = Text.breakOn (pack "#START") chartData
+    where chartEvents = ievents (parseBars --don't need lyrics
+                ((List.Split.splitOn "," . unlines . filter (\ s -> not (s == "" || "#LYRIC" `isPrefixOf` s)) . map unpack . Text.lines) chartEventLines)
+                (newInterpreter songData)
+            )
+          (chartInfo, chartEventLines) = Text.breakOn (pack "#START") chartData 
 
 -- The scroll speed and stuff
 parseChartInfo :: [Text] -> (ChartData -> ChartData)
@@ -195,20 +198,20 @@ parseChartInfo (row:rows) = parseChartInfo rows . parseChartInfo [row]
 
 -- The notes and timings. Fed bar sections (separated by commas) and events which get newlines. This one is a little bit different just cause it actually has to use the previous interpreter state
 parseBars :: [String] -> InterpreterState -> InterpreterState
-parseBars [] i = i
-parseBars [bar] istate = parseBarLines (lines bar) subdivision  istate
+parseBars [] i = i -- #ENDBAR is used to indicate increasing time when there are no notes
+parseBars [bar] istate = parseBarLines (lines bar ++ ["#ENDBAR"]) subdivision  istate
     where subdivision = length (
             concatMap -- the subdivision is the number of notes in a bar. need to ignore comments too
                 (filter isNumber . unpack . fst . Text.breakOn (pack "//") . pack)
-                (filter (\ s -> not (s == "" || head s == '#')) (lines bar))
+                (filter (\ s -> not (s == "" || head s == '#' || "//" `isPrefixOf` s)) (lines bar))
             )
 parseBars (bar:bars) istate = parseBars bars (parseBars [bar] istate) -- use the previous interpreter state for this one
 
 -- the lines for each bar. must be read line by line to update the interpreter as it goes
 parseBarLines :: [String] -> Int -> InterpreterState -> InterpreterState
-parseBarLines _ 0 istate = istate {time = time istate + measureLength} -- no notes, just advance
-    where measureLength = 4.0 * 60.0 * measureFraction (measure istate)/ ibpm istate
 parseBarLines [] _ _ = error "should be impossible to have numbers but no text" -- impossible 
+parseBarLines ["#ENDBAR"] 0 istate = istate {time = time istate + measureLength} -- no notes, just advance
+    where measureLength = 4.0 * 60.0 * measureFraction (measure istate)/ ibpm istate
 parseBarLines [""] _ istate = istate -- ignore empty lines
 parseBarLines [barLine] subdivision istate
     | "#SCROLL " `isPrefixOf` barLine =
@@ -224,7 +227,6 @@ parseBarLines [barLine] subdivision istate
                 & snd
                 & trim
                 & splitAtFirst '/'
-                & traceShowId
                 & (\(t,b) -> (fromMaybe 4 (readMaybe t), fromMaybe 4 (readMaybe b)))
                 & traceShowId
             requiredBPM = traceShowId $ ibpm istate * fromIntegral btm / 4.0 -- change bpm to make it X/4 at new bpm for timing events
@@ -243,6 +245,7 @@ parseBarLines [barLine] subdivision istate
     where measureLength = 4.0 * 60.0 * measureFraction (measure istate)/ ibpm istate
 parseBarLines (barLine:barLines) subdivision istate =
     parseBarLines barLines subdivision (parseBarLines [barLine] subdivision istate)
+
 
 -- Takes the notes and the values to parse them and move the interpreter forward
 parseNotes :: [Int] -> Double -> InterpreterState -> InterpreterState

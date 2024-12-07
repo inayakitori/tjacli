@@ -80,11 +80,13 @@ chartText sd cd =
     "\nCreator:" ++ unpack (maker sd) ++
     "\nVersion:" ++ unpack (course cd) ++
     "\nSource: TJA conversion" ++
-    "\nTags: tja_convert" ++
+    "\nTags: tja_convert " ++ 
+        "taiko_" ++ (show . level) cd ++ "_star " ++
+        "taiko_" ++ (unpack . course) cd ++ " " ++
     "\n\n[Difficulty]" ++
     "\nHPDrainRate:7" ++
     "\nCircleSize:5" ++
-    "\nOverallDifficulty:5.5" ++
+    "\nOverallDifficulty:8.3333" ++
     "\nApproachRate:5" ++
     "\nSliderMultiplier:1.4" ++
     "\nSliderTickRate:1" ++
@@ -108,7 +110,7 @@ getTimingEvents sd cd = unlines $ snd <$> sortBy (\event1 event2 -> fst event1 `
         ) <$> [x | x@(_, ScrollEvent _) <- events cd]) ++
         ((\(t,e) ->
             let (newBpm, newMeasure) = getMeasure e in
-            (t, (show . secToMs) t ++ "," ++ show newBpm ++ "," ++ show newMeasure ++ ",0,0,100,1")
+            (t, (show . secToMs) t ++ "," ++ show (getBeatLength newBpm) ++ "," ++ show newMeasure ++ ",0,0,100,1")
         ) <$> [x | x@(_, MeasureEvent _) <- events cd])
     )
 
@@ -124,11 +126,14 @@ getMeasure :: GameEvent -> (Double, Int)
 getMeasure (MeasureEvent e) = e
 getMeasure _ = error "can't get measure for non-measure event"
 
+getBeatLength :: Double -> Double
+getBeatLength bpmValue = 1000.0 * 60.0 / bpmValue
+
 mapEventValue :: GameEvent -> String
 mapEventValue (NoteEvent Don) = "0"
 mapEventValue (NoteEvent BigDon) = "4"
 mapEventValue (NoteEvent Ka) = "8"
 mapEventValue (NoteEvent BigKa) = "12"
-mapEventValue (BPMEvent bpmValue) = show $ 1000.0 * 60.0 / bpmValue
+mapEventValue (BPMEvent bpmValue) = show $ getBeatLength bpmValue
 mapEventValue (ScrollEvent scroll) = show (100.0 * (-1.0)/scroll)
 mapEventValue val = "%{PARSE NOT IMPLEMENTED: " ++ show val ++ "}%"
